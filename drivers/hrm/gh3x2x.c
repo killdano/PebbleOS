@@ -9,9 +9,11 @@
 #include <pbl/util/math.h>
 
 #ifdef CONFIG_GH3X2X_ALGO
+#include <inttypes.h>
 #include <math.h>
 
 #include <pbl/kernel/irq.h>
+#include <pbl/kernel/time.h>
 #include <pbl/kernel/work.h>
 #include <pbl/services/hrm/hrm_manager.h>
 
@@ -95,9 +97,33 @@ void gh3026_gsensor_data_get(STGsensorRawdata gsensor_buffer[], GU16 *gsensor_bu
   hrm_manager_release_accel_data();
 }
 
+// TEST ONLY: measure the interrupt process and count yields.
+static uint32_t s_test_calls;
+static uint32_t s_test_yields;
+static uint32_t s_test_yield_refused;
+static uint32_t s_test_max_ms;
+static uint32_t s_test_over_1s;
+
 static void gh3026_int_callback_function(void *context) {
   s_hrm_int_flag = false;
+  const uint64_t start = pbl_uptime_ms();
   Gh3x2xDemoInterruptProcess();
+  const uint32_t ms = (uint32_t)(pbl_uptime_ms() - start);
+
+  s_test_calls++;
+  if (ms > 1000) {
+    s_test_over_1s++;
+  }
+  if (ms > s_test_max_ms) {
+    s_test_max_ms = ms;
+    PBL_LOG_WRN("HRMTEST new max %" PRIu32 " ms (calls %" PRIu32 " yields %" PRIu32 ")", ms,
+                s_test_calls, s_test_yields);
+  }
+  if ((s_test_calls % 300) == 0) {
+    PBL_LOG_WRN("HRMTEST calls %" PRIu32 " yields %" PRIu32 " refused %" PRIu32 " max %" PRIu32
+                " ms over1s %" PRIu32,
+                s_test_calls, s_test_yields, s_test_yield_refused, s_test_max_ms, s_test_over_1s);
+  }
 }
 
 // Called by the Goodix interrupt process between passes over a FIFO backlog.
@@ -112,6 +138,9 @@ uint8_t gh3x2x_int_process_yield(void) {
     queued = pbl_sys_work_try_call(gh3026_int_callback_function, nullptr);
     if (queued) {
       s_hrm_int_flag = true;
+      s_test_yields++;
+    } else {
+      s_test_yield_refused++;
     }
   }
   pbl_irq_unlock();
